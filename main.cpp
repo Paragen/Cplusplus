@@ -181,7 +181,7 @@ struct task {
         while (n < la.length() && (n = la.find('/',n)) != string::npos) {
             string tmp = la.substr(0,l);
             if (opendir(tmp.c_str()) == NULL) {
-            mkdir(la.substr(0,l).c_str(),ACCESSPERMS) ;
+            mkdir(tmp.c_str(),ACCESSPERMS) ;
             }
             l = n++;
         }
