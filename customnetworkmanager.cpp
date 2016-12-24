@@ -1,7 +1,9 @@
 #include "customnetworkmanager.h"
 #include <stdio.h>
 #include <iostream>
-CustomNetworkManager::CustomNetworkManager(){}
+CustomNetworkManager::CustomNetworkManager(){
+
+}
 
 CustomNetworkManager::~CustomNetworkManager(){}
 
