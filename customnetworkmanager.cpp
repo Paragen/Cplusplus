@@ -217,7 +217,7 @@ bool CustomHttpReply::parse(TcpSocket* ptr) {
     }
     std::map<string,string>::iterator it;
 
-    if ((it = headers.find("Transfer-Encoding")) != headers.end() && it->second == "chunked") {
+    if (((it = headers.find("Transfer-Encoding")) != headers.end()||(it = headers.find("transfer-encoding")) != headers.end()) && it->second == "chunked") {
         while(true) {
             if (sizeToLoad == 0) {
                 num = s.find("\r\n");
@@ -242,9 +242,9 @@ bool CustomHttpReply::parse(TcpSocket* ptr) {
             }
 
         }
-    } else if ((it = headers.find("Content-Length")) != headers.end()) {
+    } else if ((it = headers.find("Content-Length")) != headers.end()||(it = headers.find("content-length")) != headers.end()) {
         if (sizeToLoad == 0) {
-            sizeToLoad = std::stoi(headers["Content-Length"]);
+            sizeToLoad = std::stoi(it->second);
         }
         messageBody += s;
         ptr->getData() = "";

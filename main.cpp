@@ -7,6 +7,13 @@
 #include <iostream>
 #include <boost/regex.hpp>
 #include <stdexcept>
+#include <unistd.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
 using namespace std;
 
 
@@ -47,7 +54,7 @@ public:
     }
 
     void  setUrl(string& url, bool outFile = true) {
-        boost::regex regExp("(?:((?:(?:https?|ftp)://)|(?://))?([\\w\\.-]+)(:[\\d]+)?)?((?:/[\\w/_\\.-]+)(?:[\\?][^\\s#]+)?)?(#[\\w_]*)?");
+        boost::regex regExp("(?:((?:(?:https?|ftp)://)|(?://))?([\\w\\.-]+)(:[\\d]+)?)?((?:/[\\w/_\\.-]*)(?:[\\?][^\\s#]+)?)?(#[\\w_]*)?");
         boost::smatch result;
         uri = "/";
         if (boost::regex_match(url,result,regExp)) {
@@ -169,15 +176,23 @@ struct task {
 
     void write() {
         string la = prefix + "/" + domain + uri;
+
+        int l,n = 0;
+        while (n < la.length() && (n = la.find('/',n)) != string::npos) {
+            string tmp = la.substr(0,l);
+            if (opendir(tmp.c_str()) == NULL) {
+            mkdir(la.substr(0,l).c_str(),ACCESSPERMS) ;
+            }
+            l = n++;
+        }
+       // string sbuf("mkdir -p " + la.substr(0,l));
+       //system(sbuf.c_str());
         if (la[la.length() - 1] == '/') {
             la+="index.html";
         }
-        int l,n = 0;
-        while ((n = la.find('/',n)) != string::npos) {
-            l = n++;
-        }
-        string sbuf("mkdir -p " + la.substr(0,l));
-        system(sbuf.c_str());
+
+           // cout << strerror(errno) << la.substr(0,l) << endl;
+        cout << la << endl;
         ofstream fout(la.c_str(),ios_base::out);
         if (raw) {
             fout << rawData;
@@ -190,14 +205,47 @@ struct task {
 
 };
 
+map<string, task> loaded;
 
+void finalwrite() {
+for (auto iter = loaded.begin(); iter != loaded.end(); ++iter) {
+    if (iter->second.success) {
+        if (!iter->second.raw && iter->second.convert) {
+            auto buf  = iter->second.data.getUrlList();
+            for (auto it = buf.begin(); it != buf.end(); ++it) {
+                string s = it->getUrl();
+                if (!it->isAbsolute()) {
+                    s = iter->second.domain + s;
+                }
+                if (loaded.find(s)!= loaded.end()) {
+                    it->refresh(string(iter->second.prefix + '/' + s));
+                }
+            }
+        }
+        iter->second.write();
+    }
+}
+}
+void my_handler(int sig,siginfo_t *siginfo,void *context) {
+    finalwrite();
+    exit(0);
+}
 
 int main(int argc,char* args[]) {
 
     task initTask;
     vector<task> newTasks;
-    map<string, task> loaded;
     Url initUrl;
+    struct sigaction sa;
+    memset(&sa,0,sizeof(sa));
+        sa.sa_sigaction = &my_handler;
+        sigset_t ss;
+        sigemptyset(&ss);
+        sigaddset(&ss,SIGQUIT);
+        sa.sa_mask = ss;
+        sa.sa_flags = SA_SIGINFO;
+        sigaction(SIGQUIT,&sa,NULL);
+
 
     for (int i = 1; i < argc; ++i) {
         switch (*args[i]) {
@@ -350,23 +398,7 @@ int main(int argc,char* args[]) {
 
     }
 
-    for (auto iter = loaded.begin(); iter != loaded.end(); ++iter) {
-        if (iter->second.success) {
-            if (!iter->second.raw && iter->second.convert) {
-                auto buf  = iter->second.data.getUrlList();
-                for (auto it = buf.begin(); it != buf.end(); ++it) {
-                    string s = it->getUrl();
-                    if (!it->isAbsolute()) {
-                        s = iter->second.domain + s;
-                    }
-                    if (loaded.find(s)!= loaded.end()) {
-                        it->refresh(string(iter->second.prefix + '/' + s));
-                    }
-                }
-            }
-            iter->second.write();
-        }
-    }
+    finalwrite();
     cout << "Total: " << loaded.size() << endl;
     } catch (runtime_error& e) {
         cout << "Program execution stoped. Error ocurred." << endl;
