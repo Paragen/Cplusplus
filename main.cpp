@@ -4,7 +4,6 @@
 #include <map>
 #include <vector>
 #include <customnetworkmanager.h>
-#include <htmlcxx/html/ParserDom.h>
 #include <iostream>
 #include <boost/regex.hpp>
 #include <stdexcept>
