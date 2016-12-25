@@ -26,6 +26,7 @@ void help() {
 
 void errorMessage() {
     cout << "Incorrect enter. \n Try to enter \"-help\" to get some help." << endl;
+    exit(1);
 }
 
 
@@ -33,58 +34,15 @@ void errorMessage() {
 
 class Url {
 public:
-    bool absolute;
-    string domain, uri, port;
+    bool absolute, correct;
+    string domain, uri, port, tail, format;
     shared_ptr<string> shptr;
 
-    Url(){}
-    Url(string& url, bool outFile = true) {
-        setUrl(url, outFile);
-    }
-    Url(shared_ptr<string> ptr, bool outFile = true ) {
-        shptr = ptr;
-        setUrl(*ptr, outFile);
-    }
+
 
     void refresh(string s) {
         if (shptr.get() != nullptr) {
             (*shptr) = s;
-        }
-        setUrl(s);
-    }
-
-    void  setUrl(string& url, bool outFile = true) {
-        boost::regex regExp("(?:((?:(?:https?|ftp)://)|(?://))?([\\w\\.-]+)(:[\\d]+)?)?((?:/[\\w/_\\.-]*)(?:[\\?][^\\s#]+)?)?(#[\\w_]*)?");
-        boost::smatch result;
-        uri = "/";
-        if (boost::regex_match(url,result,regExp)) {
-            if (result[1].matched) {
-                absolute = true;
-            } else {
-                absolute = false;
-            }
-
-
-            if (result[2].matched) {
-                domain = result[2];
-            }
-
-            if (result[3].matched) {
-                port = result[3];
-            }
-
-            if (result[4].matched) {
-                uri = result[4];
-            }
-
-            if (!absolute && !outFile) {
-                if (uri == "/") {
-                    uri = "";
-                }
-                uri = "/" + domain + uri;
-                domain = "";
-            }
-
         }
     }
 
@@ -93,13 +51,122 @@ public:
     }
 
     string getUrl() {
-        return domain + uri;
+        return domain + uri + tail;
     }
 
     bool isAbsolute() {
         return absolute;
     }
 };
+
+
+void getDestDir(string& s, int counter) {
+    int pos = s.length() - 1;
+    while (pos >= 0 && s[pos] != '/') {
+        --pos;
+    }
+
+    for (int i = 0; i < counter; ++i) {
+        --pos;
+        while (pos >= 0 && s[pos] != '/' ) {
+            --pos;
+        }
+    }
+
+    s = s.substr(0,pos + 1);
+    if (s == "") {
+        s = "/";
+    }
+
+
+
+}
+
+Url getUrlByLink(Url& pageUrl, string rawUrl) {
+
+    string s1 = R"((?:(?:(\w{0,6}):)?//)([\w\.-]+)(:\d+)?(.*))"; // check and cut absolute addres
+    string s2 = R"(([^#\?]+)(\?[^#]*)?(?:#.*)?)"; // check uri
+    boost::regex regExp(s1);
+
+    string pageUri = pageUrl.uri , linkUri;
+
+
+    boost::smatch result;
+    Url linkUrl;
+
+
+    linkUrl.correct = true;
+    if (boost::regex_match(rawUrl,result,regExp)) {
+
+        if (result[1].matched && result[1] != "http") {
+            linkUrl.correct = false;
+        } else {
+
+            linkUrl.absolute = true;
+            linkUrl.domain = result[2];
+
+            if (result[3].matched) {
+                linkUrl.port = result[3];
+                linkUrl.port = linkUrl.port.substr(1);
+            }
+
+            linkUri  = result[4];
+        }
+
+    } else {
+
+        linkUrl.absolute = false;
+        linkUrl.domain = pageUrl.domain;
+        linkUri = rawUrl;
+    }
+
+    boost::regex subRegExp(s2);
+    boost::smatch subResult;
+
+    if (linkUrl.correct && boost::regex_match(linkUri,subResult,subRegExp)) {
+
+
+        if (subResult[2].matched) {
+            linkUrl.tail = subResult[2];
+        }
+
+        linkUri = subResult[1];
+
+        if ( !linkUrl.absolute && linkUri[0] != '/' ) {
+
+            int counter = 0;
+            while (linkUri.length() > 2 && linkUri.substr(0,2) == "./") {
+                ++counter;
+                linkUri = linkUri.substr(2);
+            }
+            getDestDir(pageUri, counter);
+            linkUri =  pageUri +  linkUri;
+        }
+
+        linkUrl.uri = linkUri;
+
+        int pos = linkUri.length();
+        while (pos >=0 && linkUri[pos] != '/') {
+            if (linkUri[pos] == '.') {
+                linkUrl.format = linkUri.substr(pos + 1);
+                break;
+            }
+            --pos;
+        }
+
+    } else {
+
+        linkUrl.correct = false;
+
+    }
+
+
+    return linkUrl;
+
+
+}
+
+
 
 class HtmlFrames {
 public:
@@ -109,7 +176,7 @@ public:
     HtmlFrames( const string& target) {
         std::vector<int> partsNum;
         partsNum.push_back(0);
-        boost::regex regExp("<(([aA])|([lL][iI][nN][kK])|([sS][cC][rR][iI][pP][tT])).*?((href)|(src))=[\"\']([^\"\']+)[\"\'].*?>");
+        boost::regex regExp("<(([aA])|([lL][iI][nN][kK])|([sS][cC][rR][iI][pP][tT])|(?:[iI][mM][gG])).*?((href)|(src))=[\"\']([^\"\']+)[\"\'].*?>");
         boost::smatch match;
         boost::sregex_iterator iter(target.begin(),target.end(),regExp),invalideIter;
         while (iter != invalideIter) {
@@ -128,10 +195,10 @@ public:
         }
     }
 
-    std::vector<Url> getUrlList() {
-        std::vector<Url> answer;
+    std::vector<pair<Url, shared_ptr<string>>> getUrlList(Url& parent) {
+        std::vector<pair<Url, shared_ptr<string>>> answer;
         for (int i = 1; i < parts.size(); i+=2) {
-            answer.push_back(Url(parts[i],false));
+            answer.push_back({getUrlByLink(parent, *parts[i]), parts[i]});
         }
         return answer;
     }
@@ -146,60 +213,48 @@ public:
 };
 
 struct task {
-    string uri, domain, prefix, port, rawData;
-    int deep, redirect;
-    bool recursive, convert, raw, success, typeAll, domainAll;
+    string prefix, rawData;
+    Url url;
+    int deep = 1, redirect = 10;
+    bool recursive , convert, raw, success, typeAll, domainAll;
     HtmlFrames data;
 
-    task():uri("/"),prefix("./"), redirect(1), deep(10), recursive(false), convert(false), raw(true), success(false), typeAll(true), domainAll(false) {}
+    task():prefix("./"),  recursive(false), convert(false), raw(true), success(false), typeAll(true), domainAll(false) {}
 
-    bool load(Url& url) {
-         return (domainAll||url.domain == ""||domain ==url.domain)&&(typeAll||url.uri[url.uri.length() - 1]== '/' || url.uri.find(".html") != string::npos);
+    bool forLoad(Url& url) {
+        return (domainAll||url.domain == this->url.domain||this->url.domain == url.domain)&&(typeAll|| url.format == "php" || url.format == "html");
     }
 
-
-
-    task getChildTask(Url url) {
-        task ans(*this);
-        ans.uri = url.getUri();
-        if (url.domain != "") {
-            ans.domain = url.domain;
-        }
-        ans.deep--;
-
-        return ans;
-    }
 
     bool isTerminate() {
         return !recursive||deep == 0;
     }
 
     void write() {
-        string la = prefix + "/" + domain + uri;
+        string la = prefix + "/" + url.domain + url.uri;
 
-        int l,n = 0;
+        int n = 0;
         while (n < la.length() && (n = la.find('/',n)) != string::npos) {
-            string tmp = la.substr(0,l);
-            if (opendir(tmp.c_str()) == NULL) {
-            mkdir(tmp.c_str(),ACCESSPERMS) ;
-            }
-            l = n++;
+            string tmp = la.substr(0,n);
+            mkdir(tmp.c_str(),0777) ;
+            n++;
         }
-       // string sbuf("mkdir -p " + la.substr(0,l));
-       //system(sbuf.c_str());
         if (la[la.length() - 1] == '/') {
-            la+="index.html";
+            la += "index.html";
         }
+        la += url.tail;
+        cout << la << endl;\
 
-           // cout << strerror(errno) << la.substr(0,l) << endl;
-        cout << la << endl;
-        ofstream fout(la.c_str(),ios_base::out);
+        ofstream fout(la);
+
+        if (fout.is_open()) {
         if (raw) {
             fout << rawData;
         } else {
             fout << data.build();
         }
         fout.close();
+        }
     }
 
 
@@ -208,24 +263,23 @@ struct task {
 map<string, task> loaded;
 
 void finalwrite() {
-for (auto iter = loaded.begin(); iter != loaded.end(); ++iter) {
-    if (iter->second.success) {
-        if (!iter->second.raw && iter->second.convert) {
-            auto buf  = iter->second.data.getUrlList();
-            for (auto it = buf.begin(); it != buf.end(); ++it) {
-                string s = it->getUrl();
-                if (!it->isAbsolute()) {
-                    s = iter->second.domain + s;
-                }
-                if (loaded.find(s)!= loaded.end()) {
-                    it->refresh(string(iter->second.prefix + '/' + s));
+    for (auto iter = loaded.begin(); iter != loaded.end(); ++iter) {
+        if (iter->second.success) {
+            if (!iter->second.raw && iter->second.convert) {
+                auto buf  = iter->second.data.getUrlList(iter->second.url);
+                for (auto it = buf.begin(); it != buf.end(); ++it) {
+                    string s = it->first.getUrl();
+                    if (loaded.find(s)!= loaded.end()) {
+                        (*it->second) = iter->second.prefix + '/' + s;
+                    }
                 }
             }
+            iter->second.write();
         }
-        iter->second.write();
     }
+    cout << "Total: " << loaded.size() << endl;
 }
-}
+
 void my_handler(int sig,siginfo_t *siginfo,void *context) {
     finalwrite();
     exit(0);
@@ -233,23 +287,23 @@ void my_handler(int sig,siginfo_t *siginfo,void *context) {
 
 int main(int argc,char* args[]) {
 
+
     task initTask;
     vector<task> newTasks;
-    Url initUrl;
     struct sigaction sa;
     memset(&sa,0,sizeof(sa));
-        sa.sa_sigaction = &my_handler;
-        sigset_t ss;
-        sigemptyset(&ss);
-        sigaddset(&ss,SIGQUIT);
-        sa.sa_mask = ss;
-        sa.sa_flags = SA_SIGINFO;
-        sigaction(SIGQUIT,&sa,NULL);
+    sa.sa_sigaction = &my_handler;
+    sigset_t ss;
+    sigemptyset(&ss);
+    sigaddset(&ss,SIGQUIT);
+    sa.sa_mask = ss;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGQUIT,&sa,NULL);
 
+    try {
+        int i = 1;
+        for ( ; i < argc && args[i][0] == '-'; ++i) {
 
-    for (int i = 1; i < argc; ++i) {
-        switch (*args[i]) {
-        case '-':
             switch (args[i][1]) {
             case '-':
                 if (string(args[i] + 2) == "help") {
@@ -261,13 +315,21 @@ int main(int argc,char* args[]) {
                 initTask.convert = true;
                 break;
             case 'L':
-                sscanf(args[++i],"%d",&(initTask.deep));
+                if (i + 1 < argc) {
+                    initTask.deep = stoi(args[++i]);
+                } else {
+                    errorMessage();
+                }
                 break;
             case 'r':
                 initTask.recursive = true;
                 break;
             case 'P':
-                initTask.prefix = string(args[++i]);
+                if (i + 1 < argc) {
+                    initTask.prefix = string(args[++i]);
+                } else {
+                    errorMessage();
+                }
                 break;
             case 'd':
                 initTask.domainAll = true;
@@ -276,130 +338,139 @@ int main(int argc,char* args[]) {
                 initTask.typeAll = true;
                 break;
             default:
-                errorMessage();
-            }
-            break;
-        default:
-            if (argc > i + 1) {
-                errorMessage();
+                cout << "Unknown flag " << args[i] << endl;
                 return 1;
-            } else {
-                initUrl.refresh(string(args[i]));
             }
         }
+
+
+        if (argc - i <= 0) {
+            errorMessage();
+        } else {
+            Url empty;
+            for (; i < argc; ++i) {
+                initTask.url = getUrlByLink(empty,args[i]);
+                if (initTask.url.uri == "") {
+                    initTask.url.uri = "/";
+                }
+                newTasks.push_back(initTask);
+                loaded[initTask.url.getUrl()] = initTask;
+            }
+        }
+
+
+
+
+    } catch(...) {
+        errorMessage();
     }
 
-    initTask.domain = initUrl.domain;
-    initTask.uri = initUrl.uri;
 
-    newTasks.push_back(initTask);
-    loaded[initUrl.getUrl()] = newTasks.front();
 
     try {
         CustomNetworkManager manager;
 
 
-    int counter = 0;
-    while (newTasks.size() != 0 || counter > 0) {
-        int min = (SCALE_INT < newTasks.size())?SCALE_INT : newTasks.size();
-        if (counter < REQUEST_IN_TIME) {
-            counter += min;
-            for (int j = 0; j < min; ++j) {
-                auto i = newTasks.back();
-                newTasks.pop_back();
-                string s = i.domain + i.uri;
-                CustomHttpRequest request(s);
-                if (!manager.get(request)) {
-                    //some issues
-                    --counter;
-                    std::cout << "Cannot make request to' " << s << std::endl;
-                    continue;
+        int counter = 0;
+        while (newTasks.size() != 0 || counter > 0) {
+            int min = (SCALE_INT < newTasks.size())?SCALE_INT : newTasks.size();
+            if (counter < REQUEST_IN_TIME) {
+                counter += min;
+                for (int j = 0; j < min; ++j) {
+                    auto i = newTasks.back();
+                    newTasks.pop_back();
+                    CustomHttpRequest request(i.url.getUrl());
+                    if (!manager.get(request)) {
+                        //some issues
+                        --counter;
+                        std::cout << "Cannot make request to " << i.url.getUrl() << std::endl;
+                        continue;
+                    }
+                    std::cout << "Loading "<< i.url.getUrl() << "..." <<  std::endl;
                 }
-                std::cout << "Loading "<< s << "..." <<  std::endl;
             }
-        }
 
-        auto ans = manager.makeRequests();
+            auto ans = manager.makeRequests();
 
-        if (ans.size() == 0) {
-            std::cout << manager.getError() << std::endl;//temporaly
-            if (newTasks.size() == 0) {
-                break;
+            if (ans.size() == 0) {
+                std::cout << manager.getError() << std::endl;//temporaly
+                if (newTasks.size() == 0) {
+                    break;
+                }
             }
-        }
 
-        counter-=ans.size();
+            counter-=ans.size();
 
-        for (auto iter = ans.begin(); iter != ans.end(); ++iter) {
+            for (auto iter = ans.begin(); iter != ans.end(); ++iter) {
 
-            int code = iter->second.getStatusCode();
+                int code = iter->second.getStatusCode();
 
-            if (code==200 || code == 203) {
-                //succses
+                if (code==200 || code == 203) {
+                    //succses
 
-                string s = iter->first.getUrl();
-                auto ptr = loaded.find(s);
-                std::cout << "Page " << iter->first.getUrl() << " was downloaded" <<  std::endl;
-                if (iter->second.getHeaderValue("Content-Type").find("html")!= string::npos) {
+                    string s = iter->first.getUrl();
+                    auto ptr = loaded.find(s);
+                    std::cout << "Page " << iter->first.getUrl() << " was downloaded" <<  std::endl;
+                    if (ptr->second.url.uri.back() == '/' || ptr->second.url.format == "html" || ptr->second.url.format == "php") {
 
-                    HtmlFrames frame(iter->second.getMessageBody());
+                        HtmlFrames frame(iter->second.getMessageBody());
 
-                    if (!ptr->second.isTerminate()) {
-                        auto buf = frame.getUrlList();
-                        for (auto i = buf.begin(); i != buf.end(); ++i) {
-                            //if ((!i->isAbsolute()||i->domain == ptr->second.domain) && loaded.find(ptr->second.domain + i->getUri()) == loaded.end()) {
-                            auto tmp = ptr->second.getChildTask(*i);
-                            if (ptr->second.load(*i) && loaded.find(tmp.domain + tmp.uri) == loaded.end()) {
-                                loaded[tmp.domain + tmp.uri] = tmp;
-                                newTasks.push_back(tmp);
+                        if (!ptr->second.isTerminate()) {
+                            auto buf = frame.getUrlList(ptr->second.url);
+                            for (auto i = buf.begin(); i != buf.end(); ++i) {
+                                if (i->first.correct && ptr->second.forLoad(i->first) && loaded.find(i->first.getUrl()) == loaded.end()) {
+                                    task tmp = ptr->second;
+                                    tmp.deep--;
+                                    tmp.url = i->first;
+                                    loaded[i->first.getUrl()] = tmp;
+                                    newTasks.push_back(tmp);
+                                }
                             }
                         }
+                        ptr->second.data = frame;
+                        ptr->second.raw = false;
+
+                    } else {
+                        ptr->second.raw = true;
+                        ptr->second.rawData = iter->second.getMessageBody();
                     }
-                    ptr->second.data = frame;
-                    ptr->second.raw = false;
+                    ptr->second.success = true;
+                } else if (code / 100 == 3) {
+                    //redirect
+                    auto it = loaded.find(iter->first.getUrl());
+                    if (it->second.redirect > 0) {
+                        string s = iter->second.getHeaderValue("Location");
+                        Url url = getUrlByLink(it->second.url, s);
+                        if (it->second.domainAll ||  it->second.url.domain == url.domain) {
+                            task redirectTask(it->second);
+                            redirectTask.url  = url;
+                            string sourseUrl = it->second.url.getUrl();
+                            loaded.erase(it);
+                            --redirectTask.redirect;
+                            if (loaded.find(url.getUrl()) == loaded.end()) {
+                                loaded[url.getUrl()] = redirectTask;
+                                std::cout << " Redirect from " << sourseUrl << " to " << url.getUrl() << std::endl;
+                                newTasks.push_back(redirectTask);
+                            }
+
+                        }
+                    }
+
 
                 } else {
-                    ptr->second.raw = true;
-                    ptr->second.rawData = iter->second.getMessageBody();
-                }
-                ptr->second.success = true;
-            } else if (code / 100 == 3) {
-                //redirect
-                auto it = loaded.find(iter->first.getUrl());
-                if (it->second.redirect > 0) {
-                    string s = iter->second.getHeaderValue("Location");
-                    Url url(s);
-                     if (it->second.domainAll || url.domain == "" || it->second.domain == url.domain) {
-                    task redirectTask(it->second);
-                    string sourseUri = it->second.domain + it->second.uri;
-                    loaded.erase(it);
-                    --redirectTask.redirect;
-                    redirectTask.uri = url.getUri();
-                    if (url.domain != "") {
-                        redirectTask.domain = url.domain;
+                    string explain = "Unknown";
+                    if (iter->second.getStartingLine() != "") {
+                        explain = iter->second.getStartingLine().substr(iter->second.getStartingLine().find(" "));
                     }
-                    loaded[redirectTask.domain + redirectTask.uri] = redirectTask;
-                    std::cout << " Redirect from " << sourseUri << " to" << redirectTask.domain + redirectTask.uri << std::endl;
-                    newTasks.push_back(redirectTask);
-
-                    }
+                    std::cout << "Get reply with status code :" << explain << " from " << iter->first.getUrl() << std::endl;
                 }
 
-
-            } else {
-                string explain = "Unknown";
-                if (iter->second.getStartingLine() != "") {
-                    explain = iter->second.getStartingLine().substr(iter->second.getStartingLine().find(" "));
-                }
-                std::cout << "Get reply with status code :" << explain << " from " << iter->first.getUrl() << std::endl;
             }
 
         }
 
-    }
+        finalwrite();
 
-    finalwrite();
-    cout << "Total: " << loaded.size() << endl;
     } catch (runtime_error& e) {
         cout << "Program execution stoped. Error ocurred." << endl;
     }
