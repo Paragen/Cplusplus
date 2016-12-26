@@ -21,7 +21,7 @@ using namespace std;
 #define REQUEST_IN_TIME 20
 
 void help() {
-    cout << "Usage: myWget [option]... [url]\n -c convert links\n -r recursive load\n -L recurive depth (use with -r)\n -P path to destination directory\n-d allow load frome all domains\n-s load sourse file\n";
+    cout << "Usage: myWget [option]... [url]\n -c convert links (use with -P) \n -r recursive load\n -L recurive depth (use with -r)\n -P path to destination directory\n-d allow load frome all domains\n-s load sourse file\n";
 }
 
 void errorMessage() {
@@ -35,7 +35,7 @@ void errorMessage() {
 class Url {
 public:
     bool absolute, correct;
-    string domain, uri, port, tail, format;
+    string domain, uri, port = "80", tail, format;
     shared_ptr<string> shptr;
 
 
@@ -243,17 +243,17 @@ struct task {
             la += "index.html";
         }
         la += url.tail;
-        cout << la << endl;\
+        //cout << la << endl;
 
         ofstream fout(la);
 
         if (fout.is_open()) {
-        if (raw) {
-            fout << rawData;
-        } else {
-            fout << data.build();
-        }
-        fout.close();
+            if (raw) {
+                fout << rawData;
+            } else {
+                fout << data.build();
+            }
+            fout.close();
         }
     }
 
@@ -263,21 +263,27 @@ struct task {
 map<string, task> loaded;
 
 void finalwrite() {
+    int counter = 0;
     for (auto iter = loaded.begin(); iter != loaded.end(); ++iter) {
         if (iter->second.success) {
             if (!iter->second.raw && iter->second.convert) {
-                auto buf  = iter->second.data.getUrlList(iter->second.url);
-                for (auto it = buf.begin(); it != buf.end(); ++it) {
-                    string s = it->first.getUrl();
-                    if (loaded.find(s)!= loaded.end()) {
-                        (*it->second) = iter->second.prefix + '/' + s;
+                try {
+                    auto buf  = iter->second.data.getUrlList(iter->second.url);
+                    for (auto it = buf.begin(); it != buf.end(); ++it) {
+                        string s = it->first.getUrl();
+                        if (loaded.find(s)!= loaded.end()) {
+                            (*it->second) = iter->second.prefix + '/' + s;
+                        }
                     }
+                } catch (...) {
+                    //ignore
                 }
             }
             iter->second.write();
+            ++counter;
         }
     }
-    cout << "Total: " << loaded.size() << endl;
+    cout << "Total: " << counter << endl;
 }
 
 void my_handler(int sig,siginfo_t *siginfo,void *context) {
@@ -377,94 +383,110 @@ int main(int argc,char* args[]) {
             if (counter < REQUEST_IN_TIME) {
                 counter += min;
                 for (int j = 0; j < min; ++j) {
-                    auto i = newTasks.back();
-                    newTasks.pop_back();
-                    CustomHttpRequest request(i.url.getUrl());
-                    if (!manager.get(request)) {
-                        //some issues
-                        --counter;
-                        std::cout << "Cannot make request to " << i.url.getUrl() << std::endl;
-                        continue;
+                    try {
+                        auto i = newTasks.back();
+                        newTasks.pop_back();
+                        CustomHttpRequest request(i.url.getUrl(), i.url.port);
+
+                        if (!manager.get(request)) {
+                            //some issues
+                            --counter;
+                            std::cout << "Cannot make request to " << i.url.getUrl() << std::endl;
+                            continue;
+                        }
+                        std::cout << "Loading "<< i.url.getUrl() << "..." <<  std::endl;
+                    } catch(...) {
+                        counter--;
                     }
-                    std::cout << "Loading "<< i.url.getUrl() << "..." <<  std::endl;
                 }
             }
 
             auto ans = manager.makeRequests();
 
             if (ans.size() == 0) {
-                std::cout << manager.getError() << std::endl;//temporaly
-                if (newTasks.size() == 0) {
-                    break;
-                }
+                counter = 0;
             }
 
             counter-=ans.size();
 
             for (auto iter = ans.begin(); iter != ans.end(); ++iter) {
+                try {
 
-                int code = iter->second.getStatusCode();
+                    int code = iter->second.getStatusCode();
 
-                if (code==200 || code == 203) {
-                    //succses
+                    if (code==200 || code == 203) {
+                        //succses
 
-                    string s = iter->first.getUrl();
-                    auto ptr = loaded.find(s);
-                    std::cout << "Page " << iter->first.getUrl() << " was downloaded" <<  std::endl;
-                    if (ptr->second.url.uri.back() == '/' || ptr->second.url.format == "html" || ptr->second.url.format == "php") {
+                        string s = iter->first.getUrl();
+                        auto ptr = loaded.find(s);
+                        std::cout << "Page " << iter->first.getUrl() << " was downloaded" <<  std::endl;
+                        if (ptr->second.url.uri.back() == '/' || ptr->second.url.format == "html" || ptr->second.url.format == "php") {
 
-                        HtmlFrames frame(iter->second.getMessageBody());
+                            HtmlFrames frame(iter->second.getMessageBody());
 
-                        if (!ptr->second.isTerminate()) {
-                            auto buf = frame.getUrlList(ptr->second.url);
-                            for (auto i = buf.begin(); i != buf.end(); ++i) {
-                                if (i->first.correct && ptr->second.forLoad(i->first) && loaded.find(i->first.getUrl()) == loaded.end()) {
-                                    task tmp = ptr->second;
-                                    tmp.deep--;
-                                    tmp.url = i->first;
-                                    loaded[i->first.getUrl()] = tmp;
-                                    newTasks.push_back(tmp);
+                            if (!ptr->second.isTerminate()) {
+                                auto buf = frame.getUrlList(ptr->second.url);
+                                for (auto i = buf.begin(); i != buf.end(); ++i) {
+                                    if (i->first.correct && ptr->second.forLoad(i->first) && loaded.find(i->first.getUrl()) == loaded.end()) {
+                                        task tmp = ptr->second;
+                                        tmp.deep--;
+                                        tmp.url = i->first;
+                                        loaded[i->first.getUrl()] = tmp;
+                                        try {
+                                            newTasks.push_back(tmp);
+                                        } catch (...) {
+                                            loaded.erase(i->first.getUrl());
+                                        }
+                                    }
                                 }
                             }
+                            ptr->second.data = frame;
+                            ptr->second.raw = false;
+
+                        } else {
+                            ptr->second.raw = true;
+                            ptr->second.rawData = iter->second.getMessageBody();
                         }
-                        ptr->second.data = frame;
-                        ptr->second.raw = false;
+                        ptr->second.success = true;
+                    } else if (code / 100 == 3) {
+                        //redirect
+                        auto it = loaded.find(iter->first.getUrl());
+                        if (it->second.redirect > 0) {
+                            string s = iter->second.getHeaderValue("Location");
+                            Url url = getUrlByLink(it->second.url, s);
+                            if (it->second.domainAll ||  it->second.url.domain == url.domain) {
+                                task redirectTask(it->second);
+                                redirectTask.url  = url;
+                                string sourseUrl = it->second.url.getUrl();
+                                loaded.erase(it);
+                                --redirectTask.redirect;
+                                if (loaded.find(url.getUrl()) == loaded.end()) {
+                                    loaded[url.getUrl()] = redirectTask;
+                                    try {
+                                        newTasks.push_back(redirectTask);
+                                    } catch (...) {
+                                        loaded.erase(url.getUrl());
+                                    }
+
+                                    std::cout << " Redirect from " << sourseUrl << " to " << url.getUrl() << std::endl;
+
+                                }
+
+                            }
+                        }
+
 
                     } else {
-                        ptr->second.raw = true;
-                        ptr->second.rawData = iter->second.getMessageBody();
-                    }
-                    ptr->second.success = true;
-                } else if (code / 100 == 3) {
-                    //redirect
-                    auto it = loaded.find(iter->first.getUrl());
-                    if (it->second.redirect > 0) {
-                        string s = iter->second.getHeaderValue("Location");
-                        Url url = getUrlByLink(it->second.url, s);
-                        if (it->second.domainAll ||  it->second.url.domain == url.domain) {
-                            task redirectTask(it->second);
-                            redirectTask.url  = url;
-                            string sourseUrl = it->second.url.getUrl();
-                            loaded.erase(it);
-                            --redirectTask.redirect;
-                            if (loaded.find(url.getUrl()) == loaded.end()) {
-                                loaded[url.getUrl()] = redirectTask;
-                                std::cout << " Redirect from " << sourseUrl << " to " << url.getUrl() << std::endl;
-                                newTasks.push_back(redirectTask);
-                            }
-
+                        string explain = "Disconected";
+                        if (iter->second.getStartingLine() != "") {
+                            explain = iter->second.getStartingLine().substr(iter->second.getStartingLine().find(" "));
                         }
+                        std::cout << "Get reply with status code :" << explain << " from " << iter->first.getUrl() << std::endl;
                     }
 
+                } catch (...) {
 
-                } else {
-                    string explain = "Unknown";
-                    if (iter->second.getStartingLine() != "") {
-                        explain = iter->second.getStartingLine().substr(iter->second.getStartingLine().find(" "));
-                    }
-                    std::cout << "Get reply with status code :" << explain << " from " << iter->first.getUrl() << std::endl;
                 }
-
             }
 
         }

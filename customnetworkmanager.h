@@ -8,8 +8,8 @@
 #include <customtcpserver.h>
 #include <memory>
 
-#define PORT_HTTP "80"
-#define TIMEOUT 30000
+
+
 
 using std::list;
 using std::map;
@@ -42,13 +42,13 @@ public:
 
 class CustomHttpRequest:public CustomHttpBase {
     friend class CustomNetworkManager;
-    string addr,type,uri;
-
+    string addr,type,uri, port = "80";
+    int timeOfSilence = 0;
 
     string getRequest();
 public:
     CustomHttpRequest();
-    CustomHttpRequest(const string url);
+    CustomHttpRequest(const string url, string port = "80");
     void setUrl(const string url);
     string getUrl() const;
     string getAddr() const;
@@ -82,9 +82,11 @@ class CustomNetworkManager
     string errorMessage;
     map<TcpSocket*,std::pair<CustomHttpRequest, CustomHttpReply>> requests;
     std::vector<std::pair<CustomHttpRequest,CustomHttpReply>> replys;
+    //std::map<string, std::list<TcpSocket*>> openToUse;
     CustomTcpServer serv;
     bool addRequest(CustomHttpRequest& request,const string type);
-
+   // TcpSocket* getOpenToUse(string& addr);
+    void removeRequest(TcpSocket* sock);
 
 public:
     CustomNetworkManager();

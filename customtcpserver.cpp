@@ -128,7 +128,13 @@ void CustomTcpServer::fail(TcpSocket* tcpSocket) {
 
 TcpSocket& CustomTcpServer::socketFactory(string& addres, string& port) {
     TcpSocket* ptr = new TcpSocket(addres,port,this);
-    socketList.insert(ptr);
+    try {
+        socketList.insert(ptr);
+    } catch (...) {
+        delete ptr;
+        throw;
+    }
+
     return *ptr;
 }
 
@@ -276,55 +282,61 @@ bool CustomTcpServer::wait(int msec) {
     for (int i = 0; i < tmp; ++i) {
         epoll_event curr_ev(ebuf[i]);
         TcpSocket* curr_ptr = (TcpSocket*)curr_ev.data.ptr;
-        if (curr_ev.events & EPOLLIN) {
-            if (curr_ptr->isListen()) {
-                bool flag = false;
-                string tmp = "";
-                while (curr_ptr->toAccept != 0) {
-                    int tfd;
-                    if ((tfd = ::accept(curr_ptr->fd,NULL,NULL)) < 0) {
-                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        try {
+            if (curr_ev.events & EPOLLIN) {
+                if (curr_ptr->isListen()) {
+                    bool flag = false;
+                    string tmp = "";
+                    while (curr_ptr->toAccept != 0) {
+                        int tfd;
+                        if ((tfd = ::accept(curr_ptr->fd,NULL,NULL)) < 0) {
+                            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                                break;
+                            }
+                            flag = true;
                             break;
+
                         }
-                        flag = true;
-                        break;
-
+                        TcpSocket* ptr;
+                        try {
+                            ptr = new TcpSocket(tmp,tmp,this);
+                        } catch(...) {
+                            close(tfd);
+                            throw;
+                        }
+                        --(curr_ptr->toAccept);
+                        ptr->fd = tfd;
+                        ptr->_closed = false;
+                        socketList.insert(ptr);
+                        curr_ptr->_acpt.push_back(ptr);
                     }
-                    TcpSocket* ptr;
-                    try {
-                        ptr = new TcpSocket(tmp,tmp,this);
-                    } catch(...) {
-                        close(tfd);
-                        throw;
+                    if (flag) {
+                        __failed.push_back(curr_ptr);
                     }
-                    --(curr_ptr->toAccept);
-                    ptr->fd = tfd;
-                    ptr->_closed = false;
-                    socketList.insert(ptr);
-                    curr_ptr->_acpt.push_back(ptr);
-                }
-                if (flag) {
-                    __failed.push_back(curr_ptr);
-                }
-                __acpt.push_back(curr_ptr);
+                    __acpt.push_back(curr_ptr);
 
-                if (curr_ptr->toAccept == 0) {
-                    epollChange(curr_ptr, 0);
-                }
+                    if (curr_ptr->toAccept == 0) {
+                        epollChange(curr_ptr, 0);
+                    }
 
+                } else {
+                    read(curr_ptr);
+                }
+            } else if (curr_ev.events & EPOLLOUT){
+                if (!curr_ptr->isClosed()){
+                    write(curr_ptr);
+                } else {
+                    epollChange(curr_ptr,0);
+                    curr_ptr->_closed = false;
+                    __roU.push_back(curr_ptr);
+                }
             } else {
-                read(curr_ptr);
+                fail(curr_ptr);
             }
-        } else if (curr_ev.events & EPOLLOUT){
-            if (!curr_ptr->isClosed()){
-                write(curr_ptr);
-            } else {
-                epollChange(curr_ptr,0);
-                curr_ptr->_closed = false;
-                __roU.push_back(curr_ptr);
-            }
-        } else {
-            fail(curr_ptr);
+        } catch(...) {
+            epollChange(curr_ptr,0);
+            close(curr_ptr->fd);
+            curr_ptr->_closed = true;
         }
     }
     return true;
