@@ -34,7 +34,7 @@ void errorMessage() {
 
 class Url {
 public:
-    bool absolute, correct;
+    bool absolute = false , correct = false;
     string domain, uri, port = "80", tail, format;
     shared_ptr<string> shptr;
 
